@@ -20,5 +20,5 @@
 | `--kraken_standard_db <path>`        | (required) path to Kraken2_standard_16GB DB |
 | `--ivar`        | (optional) run iVar variant calling |
 | `-profile docker`                         | (required) |
-| `-c /path/to/your/custom.config`          | (optional) used specify a custom configuration file (see [Nextflow docs](https://www.nextflow.io/docs/latest/config.html) |
+| `-c /path/to/your/custom.config`          | (optional) used specify a custom configuration file (see [Nextflow docs](https://www.nextflow.io/docs/latest/config.html)) |
 
