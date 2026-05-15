@@ -1,6 +1,7 @@
 process KRAKEN2_EXTRACT {
     tag "$meta.id"
-    label 'process_high'
+    label 'process_medium'
+    disk 100.GB
 
     container "quay.io/jefffurlong/krakentools"
 

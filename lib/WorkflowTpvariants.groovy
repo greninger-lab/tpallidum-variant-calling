@@ -12,11 +12,11 @@ class WorkflowTpvariants {
     //
     public static void initialise(params, log) {
 
-        if (!params.kraken_host_db) { 
+        if (!params.kraken_host_db && !params.use_mountpoint) { 
             Nextflow.error "Kraken host database not specified e.g. '--kraken_host_db s3://fh-pi-jerome-k-eco/greninger-lab/greninger-lab-file-share/refs/Kraken2_human/k2_human/'."
         }
 
-        if (!params.kraken_standard_db) {
+        if (!params.kraken_standard_db && !params.use_mountpoint) {
             Nextflow.error "Kraken standard database not specified with e.g. '--kraken_host_db s3://fh-pi-jerome-k-eco/greninger-lab/greninger-lab-file-share/refs/Kraken2_human/k2_human/'."
         }
 

@@ -18,7 +18,7 @@ def process_file(file_path, out_file_name):
                     # Split the 9th field by ':'
                     split_string = row[9].split(':')
                     
-                    # Check if the last field matches "0,0"
+                    # Check if the last field matches "0,0" - ploidy = 1
                     if split_string[-1] == "0,0" and row[4] == "<NON_REF>":
                         # Multiply split_string[2] by 5.5 and round to nearest integer
                         try:

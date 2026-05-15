@@ -56,6 +56,7 @@ ch_mask_v4_idx              = Channel.fromPath( "$projectDir/assets/ref/" + para
 ch_exclude                  = Channel.fromPath( "$projectDir/assets/ref/exclude.txt" )
 //ch_per_pos_mask             = Channel.fromPath( "$projectDir/assets/ref/per_pos_mask.bed" )
 
+ch_adapter                  = Channel.fromPath("$projectDir/assets/Concatenated.fa", checkIfExists: true)
 //ch_NC_021508_sequence_fasta          = Channel.fromPath( "$projectDir/assets/ref/" + params.ref + ".1_sequence.fasta" )
 //ch_NC_021508_sequence_fasta_fai      = Channel.fromPath( "$projectDir/assets/ref/" + params.ref + ".1_sequence.fasta.fai" )
 //ch_NC_021508_sequence_gff            = Channel.fromPath( "$projectDir/assets/ref/" + params.ref + ".1_sequence.gff" )
@@ -113,7 +114,6 @@ include { SAMTOOLS_MERGE                                                     } f
 include { PICARD_MARKDUPLICATES                                              } from '../modules/nf-core/picard/markduplicates/main'
 include { PICARD_ADDORREPLACEREADGROUPS                                      } from '../modules/nf-core/picard/addorreplacereadgroups/main'
 include { GATK4_HAPLOTYPECALLER                                              } from '../modules/nf-core/gatk4/haplotypecaller/main'
-include { GATK4_HAPLOTYPECALLER as GATK4_HAPLOTYPECALLER_REMAP               } from '../modules/nf-core/gatk4/haplotypecaller/main'
 include { GATK4_VARIANTFILTRATION as GATK4_VARIANTFILTRATION_DEPTH           } from '../modules/nf-core/gatk4/variantfiltration/main'
 include { GATK4_VARIANTFILTRATION as GATK4_VARIANTFILTRATION_PHYLO           } from '../modules/nf-core/gatk4/variantfiltration/main'
 include { GATK4_HAPLOTYPECALLER as GATK4_HAPLOTYPECALLER_CONSENSUS           } from '../modules/nf-core/gatk4/haplotypecaller/main'
@@ -172,15 +172,18 @@ workflow TPVARIANTS {
         INPUT_CHECK.out.reads
     )
 
+    def ch_host_db = params.kraken_host_db ? Channel.fromPath(params.kraken_host_db) : Channel.value([])
     KRAKEN2_REMOVE_HUMAN (
         INPUT_CHECK.out.reads,
-        params.kraken_host_db,
+        ch_host_db,
         true,  // save fastqs
-        false  // classified reads report      
+        false,  // classified reads report      
+        params.kraken_host_db_mount
     )    
 
     TRIMMOMATIC (
-        KRAKEN2_REMOVE_HUMAN.out.unclassified_reads_fastq
+        KRAKEN2_REMOVE_HUMAN.out.unclassified_reads_fastq,
+        KRAKEN2_REMOVE_HUMAN.out.unclassified_reads_fastq.combine(ch_adapter).map{ [it[2]] } 
     )
 
     SEQKIT_STATS_TRIM (
@@ -190,14 +193,16 @@ workflow TPVARIANTS {
     BBDUK_GENOMIC (
         TRIMMOMATIC.out.trimmed_reads,
         TRIMMOMATIC.out.trimmed_reads.combine(ch_all_SS14_rna).map{ [it[2]] }
-    )
+    )    
 
     // Classify and TP extract all_SS14_rna
+    def ch_standard_db = params.kraken_standard_db ? Channel.fromPath(params.kraken_standard_db) : Channel.value([])
     KRAKEN2_KRAKEN2 (
         BBDUK_GENOMIC.out.removed_reads,
-        params.kraken_standard_db,
+        ch_standard_db,
         true,  // save fastqs
-        true  // classified reads report      
+        true,  // classified reads report      
+        params.kraken_standard_db_mount
     )
 
     KRAKEN2_KRAKEN2.out.classified_reads_fastq
@@ -296,12 +301,12 @@ workflow TPVARIANTS {
         )
     }
 
-/* This was to initiate remap (left in for future convenience)
+/* start cut in 
     INPUT_CHECK (
         file(params.input)
     )
 
-    GATK4_HAPLOTYPECALLER_REMAP (
+    GATK4_HAPLOTYPECALLER (
         INPUT_CHECK.out.reads.map{ [it[0],[it[1][0]], [it[1][1]], [], []] },
         INPUT_CHECK.out.reads.combine(ch_fasta).map{ [it[0],[it[2]]]},
         INPUT_CHECK.out.reads.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
@@ -309,9 +314,9 @@ workflow TPVARIANTS {
         [[],[]],
         [[],[]]      
     )
-*/
+ end cut in */
 
-    GATK4_HAPLOTYPECALLER_REMAP (
+    GATK4_HAPLOTYPECALLER (
         SUBSAMPLE.out.bam.join(SUBSAMPLE.out.bai).map{ [it[0], [it[1]], [it[2]], [], []]},
         SUBSAMPLE.out.bam.combine(ch_fasta).map{ [it[0],[it[2]]]},
         SUBSAMPLE.out.bam.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
@@ -321,160 +326,13 @@ workflow TPVARIANTS {
     )
 
     REPLACE_PL (
-        GATK4_HAPLOTYPECALLER_REMAP.out.vcf,
-        GATK4_HAPLOTYPECALLER_REMAP.out.vcf.combine(ch_replace_pl_r).map{ [it[2]] }
+        GATK4_HAPLOTYPECALLER.out.vcf,
+        GATK4_HAPLOTYPECALLER.out.vcf.combine(ch_replace_pl_r).map{ [it[2]] }
     )
 
     TABIX_BGZIP (
         REPLACE_PL.out.vcf
-    )    
-
-    GATK4_INDEXFEATUREFILE (
-        TABIX_BGZIP.out.output
-    )
-    TABIX_BGZIP.out.output.map{ [it[1]] }.collect().toList().set{ ch_vcfs }
-    
-    GATK4_INDEXFEATUREFILE.out.index.map{ [it[1]] }.collect().toList().set{ ch_indexes }
-    ch_meta = Channel.of([id: 'final']) // Example metadata
-
-    ch_input = ch_meta.combine(ch_vcfs)
-                 .combine(ch_indexes)
-                 .map { meta, vcf, idx -> tuple(meta, vcf, idx) }
-
-    GATK4_COMBINEGVCFS (
-        ch_input,
-        ch_fasta,
-        ch_fasta_fai,
-        ch_dict,
-        params.gvcf_list ? file(params.gvcf_list) : []
-    )
-
-    GATK4_COMBINEGVCFS.out.combined_gvcf.join(GATK4_COMBINEGVCFS.out.index).map{ [it[0], [it[1]], [it[2]], [], []]}.set{ ch_genotype_gvcf_input }
-
-    GATK4_GENOTYPEGVCFS (
-        ch_genotype_gvcf_input,
-        ch_fasta,
-        ch_fasta_fai,
-        ch_dict
-    )
-
-    BCFTOOLS_GT_UNFILTERED (
-        GATK4_GENOTYPEGVCFS.out.vcf
-    )
-
-    // make DP and AF params
-    BCFTOOLS_GT_FILTERED_DP (
-        BCFTOOLS_GT_UNFILTERED.out.vcf
-    )
-
-    GATK4_INDEX_GT_FILTERED_DP (
-        BCFTOOLS_GT_FILTERED_DP.out.vcf
-    )
-    
-    GATK4_VARIANTFILTRATION_GT_AF08DP3 (
-        BCFTOOLS_GT_FILTERED_DP.out.vcf.join(GATK4_INDEX_GT_FILTERED_DP.out.index).map{ [it[0], [it[1]], [it[2]]] },
-        BCFTOOLS_GT_FILTERED_DP.out.vcf.combine(ch_fasta).map{ [it[0],[it[2]]]},
-        BCFTOOLS_GT_FILTERED_DP.out.vcf.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
-        BCFTOOLS_GT_FILTERED_DP.out.vcf.combine(ch_dict).map{ [it[0],[it[2]]]},
-        BCFTOOLS_GT_FILTERED_DP.out.vcf.combine(ch_mask_v4).map{ [it[0],[it[2]]]},
-        BCFTOOLS_GT_FILTERED_DP.out.vcf.combine(ch_mask_v4_idx).map{ [it[0],[it[2]]]}        
-    )
-
-    BCFTOOLS_VIEW_SNP (
-        GATK4_VARIANTFILTRATION_GT_AF08DP3.out.vcf
-    )
-
-    BCFTOOLS_VIEW_FILTER_MASK (
-        BCFTOOLS_VIEW_SNP.out.vcf
-    )
-
-    GATK4_INDEX_MASKED_SNPS (
-        BCFTOOLS_VIEW_FILTER_MASK.out.vcf
-    )
-
-    VARIANTS_TO_TABLE_NOCALL (
-        BCFTOOLS_VIEW_FILTER_MASK.out.vcf.join(GATK4_INDEX_MASKED_SNPS.out.index).map{ [it[0], [it[1]], [it[2]]] }
-    )
-
-    PERCENT_NO_GENOTYPE (
-        VARIANTS_TO_TABLE_NOCALL.out.txt,
-        ch_exclude,
-        ch_calculate_percent_no_gt
-    )
-/*
-    GATK4_SELECTVARIANTS_MASKED_SNPS (
-        BCFTOOLS_VIEW_FILTER_MASK.out.vcf.join(GATK4_INDEX_MASKED_SNPS.out.index).join(PERCENT_NO_GENOTYPE.out.n25)
-    )
-
-    GATK4_SELECTVARIANTS_PHYLOMARKED   (
-        GATK4_VARIANTFILTRATION_GT_AF08DP3.out.vcf.join(GATK4_VARIANTFILTRATION_GT_AF08DP3.out.tbi).join(PERCENT_NO_GENOTYPE.out.n25)
-    )
-
-    VARIANTS_TO_N25_SNPS (
-        GATK4_SELECTVARIANTS_MASKED_SNPS.out.vcf.join(GATK4_SELECTVARIANTS_MASKED_SNPS.out.tbi).map{ [it[0], [it[1]], [it[2]]] }
-    )
-
-    SPLIT_VCF (
-        GATK4_SELECTVARIANTS_PHYLOMARKED.out.vcf
-    )
-
-    VARIANTS_TABLE_FOR_PHYLO (
-       GATK4_VARIANTFILTRATION_GT_AF08DP3.out.vcf.join(GATK4_VARIANTFILTRATION_GT_AF08DP3.out.tbi)
-    )
-
-    GENERATE_POS_MASK_BED (
-        VARIANTS_TABLE_FOR_PHYLO.out.txt,
-        ch_generate_phylo_mask_bed
-    )
-
-    MAKE_CHUNKS (
-        SPLIT_VCF.out.vcfs.join(GENERATE_POS_MASK_BED.out.bed),
-        ch_fasta,
-        ch_fasta_fai,
-        ch_dict,
-        ch_make_chunks
-    )
-*/
-/*
-    GATK4_HAPLOTYPECALLER (
-        SUBSAMPLE.out.bam.join(SUBSAMPLE.out.bai).map{ [it[0], [it[1]], [it[2]], [], []] },
-        SUBSAMPLE.out.bam.combine(ch_fasta).map{ [it[0],[it[2]]]},
-        SUBSAMPLE.out.bam.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
-        SUBSAMPLE.out.bam.combine(ch_dict).map{ [it[0],[it[2]]]},
-        [[],[]],
-        [[],[]]      
-    )
-*/
-/*
-    GATK4_VARIANTFILTRATION_DEPTH (
-        GATK4_HAPLOTYPECALLER.out.vcf.join(GATK4_HAPLOTYPECALLER.out.tbi).map{ [it[0], [it[1]], [it[2]]] },
-        GATK4_HAPLOTYPECALLER.out.vcf.combine(ch_fasta).map{ [it[0],[it[2]]]},
-        GATK4_HAPLOTYPECALLER.out.vcf.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
-        GATK4_HAPLOTYPECALLER.out.vcf.combine(ch_dict).map{ [it[0],[it[2]]]},
-        [[],[]],
-        [[],[]]  
-    )
-
-    GATK4_VARIANTFILTRATION_PHYLO (
-        GATK4_VARIANTFILTRATION_DEPTH.out.vcf.join(GATK4_VARIANTFILTRATION_DEPTH.out.tbi).map{ [it[0], [it[1]], [it[2]]] },
-        GATK4_VARIANTFILTRATION_DEPTH.out.vcf.combine(ch_fasta).map{ [it[0],[it[2]]]},
-        GATK4_VARIANTFILTRATION_DEPTH.out.vcf.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
-        GATK4_VARIANTFILTRATION_DEPTH.out.vcf.combine(ch_dict).map{ [it[0],[it[2]]]},
-        GATK4_VARIANTFILTRATION_DEPTH.out.vcf.combine(ch_mask).map{ [it[0],[it[2]]]},
-        GATK4_VARIANTFILTRATION_DEPTH.out.vcf.combine(ch_mask_idx).map{ [it[0],[it[2]]]}
-    )    
-*/
-
-/*
-    GATK4_HAPLOTYPECALLER_CONSENSUS (
-        SUBSAMPLE.out.bam.join(SUBSAMPLE.out.bai).map{ [it[0],[it[1]], [it[2]], [], []] },
-        SUBSAMPLE.out.bam.combine(ch_fasta).map{ [it[0],[it[2]]]},
-        SUBSAMPLE.out.bam.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
-        SUBSAMPLE.out.bam.combine(ch_dict).map{ [it[0],[it[2]]]},
-        [[],[]],
-        [[],[]]      
-    )
-*/
+    ) 
 
     SEQKIT_STATS_RAW.out.stats
         .join(SEQKIT_STATS_TRIM.out.stats)
@@ -491,42 +349,11 @@ workflow TPVARIANTS {
     )
 
     SUMMARY_FINAL ( 
-        SUMMARY.out.summary_tsv.collect(), 
-        VARIANTS_TO_TABLE_NOCALL.out.txt,
-        ch_calculate_no_call_stats
+        SUMMARY.out.summary_tsv.collect() 
+        //VARIANTS_TO_TABLE_NOCALL.out.txt,
+        //ch_calculate_no_call_stats
     )   
 
-/*
-    GATK4_VARIANTFILTRATION_DEPTH_CONSENSUS (
-        GATK4_HAPLOTYPECALLER_CONSENSUS.out.vcf.join(GATK4_HAPLOTYPECALLER_CONSENSUS.out.tbi).map{ [it[0], [it[1]], [it[2]]] },
-        GATK4_HAPLOTYPECALLER_CONSENSUS.out.vcf.combine(ch_fasta).map{ [it[0],[it[2]]]},
-        GATK4_HAPLOTYPECALLER_CONSENSUS.out.vcf.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
-        GATK4_HAPLOTYPECALLER_CONSENSUS.out.vcf.combine(ch_dict).map{ [it[0],[it[2]]]},
-        [[],[]],
-        [[],[]]  
-    )
-
-    GATK4_VARIANTFILTRATION_PHYLO_CONSENSUS (
-        GATK4_VARIANTFILTRATION_DEPTH_CONSENSUS.out.vcf.join(GATK4_VARIANTFILTRATION_DEPTH_CONSENSUS.out.tbi).map{ [it[0], [it[1]], [it[2]]] },
-        GATK4_VARIANTFILTRATION_DEPTH_CONSENSUS.out.vcf.combine(ch_fasta).map{ [it[0],[it[2]]]},
-        GATK4_VARIANTFILTRATION_DEPTH_CONSENSUS.out.vcf.combine(ch_fasta_fai).map{ [it[0],[it[2]]]},
-        GATK4_VARIANTFILTRATION_DEPTH_CONSENSUS.out.vcf.combine(ch_dict).map{ [it[0],[it[2]]]},
-        GATK4_VARIANTFILTRATION_DEPTH_CONSENSUS.out.vcf.combine(ch_mask).map{ [it[0],[it[2]]]},
-        GATK4_VARIANTFILTRATION_DEPTH_CONSENSUS.out.vcf.combine(ch_mask_idx).map{ [it[0],[it[2]]]}
-    )
-
-    TABIX_BGZIP (
-        GATK4_VARIANTFILTRATION_PHYLO_CONSENSUS.out.vcf
-    )
-
-    TABIX_TABIX (
-        TABIX_BGZIP.out.output
-    )
-
-    BCFTOOLS_CONSENSUS (
-        TABIX_BGZIP.out.output.join(TABIX_TABIX.out.tbi).combine(ch_fasta).map{ [it[0], [it[1]], [it[2]], [it[3]], []] }
-    )
-*/
 }
 
 /*

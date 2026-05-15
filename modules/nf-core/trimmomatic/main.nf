@@ -1,6 +1,7 @@
 process TRIMMOMATIC {
     tag "$meta.id"
-    label 'process_high'
+    label 'process_medium'
+
 
     conda "${moduleDir}/environment.yml"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
@@ -9,6 +10,7 @@ process TRIMMOMATIC {
 
     input:
     tuple val(meta), path(reads)
+    path(adapters)
 
     output:
     tuple val(meta), path("*.paired.trim*.fastq.gz")   , emit: trimmed_reads
@@ -30,7 +32,7 @@ process TRIMMOMATIC {
         : "${prefix}.paired.trim_1.fastq.gz ${prefix}.unpaired.trim_1.fastq.gz ${prefix}.paired.trim_2.fastq.gz ${prefix}.unpaired.trim_2.fastq.gz"
     def qual_trim = task.ext.args2 ?: ''
     """
-    cat /usr/local/share/trimmomatic-0.39-2/adapters/*.fa > /usr/local/share/trimmomatic-0.39-2/adapters/Concatenated.fa
+    cp ${adapters} /usr/local/share/trimmomatic-0.39-2/adapters/Concatenated.fa
     
     trimmomatic \\
         $trimmed \\
